@@ -1,0 +1,826 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="theme-color" content="#0a0e1a">
+    <title>BébéLog</title>
+    <link rel="manifest" href="manifest.json">
+    <link rel="apple-touch-icon" href="icon.svg">
+    
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js" crossorigin></script>
+    
+    <style>
+        body { margin: 0; padding: 0; background-color: #0a0e1a; -webkit-tap-highlight-color: transparent; overscroll-behavior-y: none; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script>
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('./sw.js')
+                    .then(reg => console.log('BébéLog PWA prêt !'))
+                    .catch(err => console.log('Erreur PWA:', err));
+            });
+        }
+    </script>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+
+        const BTC_ADDRESS = "bc1q07ex3srpj8n0eud30qtu4f7nv9ydnp3gpqkz9lrgpjxud5288fhqrv7urd";
+        const KOFI_URL    = "https://ko-fi.com/rekojel";
+
+        // ─── Helpers ──────────────────────────────────────────────────────────────────
+        function nowISO() { return new Date().toISOString(); }
+        function fmtTime(iso) { if (!iso) return ""; return new Date(iso).toLocaleTimeString("fr-FR",{hour:"2-digit",minute:"2-digit"}); }
+        function fmtDate(iso) { if (!iso) return ""; return new Date(iso).toLocaleDateString("fr-FR",{day:"2-digit",month:"short"}); }
+        function fmtDuration(s) {
+          const h=Math.floor(s/3600), m=Math.floor((s%3600)/60), sec=s%60;
+          if(h>0) return `${h}h${String(m).padStart(2,"0")}`;
+          if(m>0) return `${m}min${String(sec).padStart(2,"0")}s`;
+          return `${sec}s`;
+        }
+        function getAge(birthDate) {
+          if (!birthDate) return null;
+          const days=Math.floor((Date.now()-new Date(birthDate))/86400000);
+          if(days<7) return `${days} jour${days>1?"s":""}`;
+          const w=Math.floor(days/7); if(w<9) return `${w} semaine${w>1?"s":""}`;
+          const mo=Math.floor(days/30.44); if(mo<24) return `${mo} mois`;
+          const y=Math.floor(mo/12), r=mo%12;
+          return r>0?`${y} an${y>1?"s":""} et ${r} mois`:`${y} an${y>1?"s":""}`;
+        }
+        function isToday(iso) { return new Date(iso).toDateString()===new Date().toDateString(); }
+        function uid() { return Date.now()+Math.random().toString(36).slice(2); }
+
+        // ─── Baby factory ─────────────────────────────────────────────────────────────
+        const BABY_AVATARS = ["👶","🐣","🍼","🌸","⭐","🌙","🦋","🐥"];
+        function newBaby(name="Bébé", birthDate="", avatar="👶") {
+          return {
+            id: uid(), name, birthDate, avatar,
+            feeds:[], sleeps:[], diapers:[], weights:[], growths:[],
+            temps:[], notes:[], medicines:[], vaccines:[], milestones:[], activities:[],
+            checklist:{
+              daily:[
+                {id:1, label:"Biberon / Allaitement matin",        done:false, icon:"🍼"},
+                {id:2, label:"Change couche matin",                done:false, icon:"💩"},
+                {id:3, label:"Éveil / Tummy time matin",           done:false, icon:"🧸"},
+                {id:4, label:"Sieste du matin",                    done:false, icon:"😴"},
+                {id:5, label:"Biberon / Allaitement midi",         done:false, icon:"🍼"},
+                {id:6, label:"Change couche après-midi",           done:false, icon:"💩"},
+                {id:7, label:"Promenade / Air frais",              done:false, icon:"🌤️"},
+                {id:8, label:"Sieste de l'après-midi",             done:false, icon:"😴"},
+                {id:9, label:"Biberon / Allaitement goûter",       done:false, icon:"🍼"},
+                {id:10,label:"Bain du soir",                       done:false, icon:"🛁"},
+                {id:11,label:"Massage bébé",                       done:false, icon:"🤲"},
+                {id:12,label:"Biberon / Allaitement soir",         done:false, icon:"🍼"},
+                {id:13,label:"Rituel coucher (berceuse, histoire)",done:false, icon:"🌙"},
+                {id:14,label:"Médicaments si prescrit",            done:false, icon:"💊"},
+              ],
+              weekly:[
+                {id:20,label:"Peser le bébé",                      done:false, icon:"⚖️"},
+                {id:21,label:"Mesurer la taille",                  done:false, icon:"📏"},
+                {id:22,label:"Soin du nombril / cordon",           done:false, icon:"🩹"},
+                {id:23,label:"Couper les ongles",                  done:false, icon:"✂️"},
+                {id:24,label:"Nettoyer et stériliser les biberons",done:false, icon:"♻️"},
+                {id:25,label:"Laver les jouets & doudous",         done:false, icon:"🧸"},
+                {id:26,label:"Appel sage-femme / pédiatre si besoin",done:false, icon:"👩‍⚕️"},
+              ],
+              milestonesList:[
+                {id:30,label:"Rendez-vous J8 (sage-femme)",        done:false, icon:"📅"},
+                {id:31,label:"Rendez-vous 1 mois (pédiatre)",      done:false, icon:"📅"},
+                {id:32,label:"Vaccins 2 mois",                     done:false, icon:"💉"},
+                {id:33,label:"Vaccins 4 mois",                     done:false, icon:"💉"},
+                {id:34,label:"Vaccins 5 mois",                     done:false, icon:"💉"},
+                {id:35,label:"Vaccins 11 mois",                    done:false, icon:"💉"},
+                {id:36,label:"Rendez-vous 9 mois (pédiatre)",      done:false, icon:"📅"},
+                {id:37,label:"Inscription crèche",                 done:false, icon:"🏠"},
+                {id:38,label:"Rendez-vous 24 mois (pédiatre)",     done:false, icon:"📅"},
+                {id:39,label:"Inscription école maternelle",       done:false, icon:"🎒"},
+              ]
+            }
+          };
+        }
+
+        // ─── Colors & Styles ──────────────────────────────────────────────────────────
+        const C = {
+          bg:"#0a0e1a", surface:"#131929", surfaceHigh:"#1a2340",
+          border:"#1e2d4a", borderAccent:"#2a3f6a",
+          accent:"#5b8dee", accentSoft:"rgba(91,141,238,0.15)",
+          accentGreen:"#4ecb7e", accentOrange:"#f5a623",
+          accentRed:"#ff5f6d", accentPink:"#ff6fb0", accentPurple:"#a78bfa",
+          text:"#dce6f8", textMid:"#8ca0c0", textDim:"#4a5a78",
+        };
+        const S = {
+          app:{fontFamily:"'Nunito',sans-serif",background:C.bg,minHeight:"100vh",maxWidth:430,margin:"0 auto",display:"flex",flexDirection:"column",color:C.text},
+          header:{background:`linear-gradient(160deg,#0f1830 0%,${C.bg} 100%)`,padding:"14px 16px 0",borderBottom:`1px solid ${C.border}`},
+          navRow:{display:"flex",gap:0,overflowX:"auto",scrollbarWidth:"none"},
+          navBtn:{flex:"0 0 auto",padding:"10px 12px",border:"none",background:"transparent",color:C.textDim,fontSize:11,fontWeight:700,cursor:"pointer",borderBottom:"3px solid transparent",transition:"all 0.2s",fontFamily:"inherit",whiteSpace:"nowrap"},
+          navBtnActive:{color:C.accent,borderBottomColor:C.accent},
+          scroll:{flex:1,overflowY:"auto",padding:"0 0 30px",scrollbarWidth:"none"},
+          page:{padding:14,display:"flex",flexDirection:"column",gap:12},
+          card:{background:C.surface,borderRadius:16,padding:16,border:`1px solid ${C.border}`},
+          cardGlow:{background:`linear-gradient(135deg,${C.surfaceHigh} 0%,${C.surface} 100%)`,borderRadius:16,padding:16,border:`1px solid ${C.borderAccent}`},
+          secTitle:{fontSize:12,fontWeight:700,color:C.textMid,textTransform:"uppercase",letterSpacing:1.2,marginTop:2},
+          label:{display:"block",fontSize:12,color:C.textMid,marginBottom:6,fontWeight:700},
+          input:{width:"100%",background:"#060b15",border:`1px solid ${C.borderAccent}`,borderRadius:10,padding:"11px 12px",color:C.text,fontSize:14,fontFamily:"inherit",boxSizing:"border-box",outline:"none"},
+          textarea:{width:"100%",background:"#060b15",border:`1px solid ${C.borderAccent}`,borderRadius:10,padding:"11px 12px",color:C.text,fontSize:14,fontFamily:"inherit",boxSizing:"border-box",outline:"none",minHeight:90,resize:"none"},
+          typeRow:{display:"flex",flexWrap:"wrap",gap:7,marginTop:4},
+          chip:{padding:"7px 13px",borderRadius:10,border:`1px solid ${C.borderAccent}`,background:"transparent",color:C.textMid,fontSize:12,cursor:"pointer",fontFamily:"inherit",fontWeight:600,transition:"all 0.15s"},
+          chipActive:{background:C.accentSoft,borderColor:C.accent,color:C.accent},
+          btn:{width:"100%",background:`linear-gradient(135deg,${C.accent},#7c6bf0)`,border:"none",borderRadius:12,padding:"13px",color:"#fff",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:"inherit",marginTop:6,letterSpacing:"0.3px"},
+          btnOutline:{width:"100%",background:"transparent",border:`1px solid ${C.borderAccent}`,borderRadius:12,padding:"12px",color:C.textMid,fontSize:13,fontWeight:600,cursor:"pointer",fontFamily:"inherit",marginTop:4},
+          btnDanger:{background:`linear-gradient(135deg,${C.accentRed},#c94b4b)`},
+          btnGreen:{background:`linear-gradient(135deg,${C.accentGreen},#2ecc71)`},
+          btnOrange:{background:`linear-gradient(135deg,${C.accentOrange},#e87d1e)`},
+          logRow:{background:C.surface,borderRadius:13,padding:"12px 14px",display:"flex",alignItems:"center",gap:12,border:`1px solid ${C.border}`},
+          logIcon:{fontSize:22,flexShrink:0,width:32,textAlign:"center"},
+          logInfo:{flex:1},
+          logTitle:{fontSize:13,fontWeight:700,color:C.text},
+          logSub:{fontSize:11,color:C.textMid,marginTop:2},
+          delBtn:{background:"transparent",border:"none",cursor:"pointer",fontSize:16,padding:4,color:C.textDim},
+          empty:{textAlign:"center",color:C.textDim,fontSize:13,padding:"20px 0"},
+          alert:{background:"rgba(255,95,109,0.1)",border:"1px solid rgba(255,95,109,0.3)",borderRadius:10,padding:12,color:C.accentRed,fontSize:13,marginBottom:8},
+          success:{background:"rgba(78,203,126,0.1)",border:"1px solid rgba(78,203,126,0.3)",borderRadius:10,padding:12,color:C.accentGreen,fontSize:13,marginBottom:8},
+          progressBar:{height:8,background:"#060b15",borderRadius:99,overflow:"hidden",marginTop:6},
+          progressFill:{height:"100%",borderRadius:99,transition:"width 0.4s ease"},
+          statGrid:{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:9},
+          statCard:{background:C.surface,borderRadius:14,padding:"14px 10px",textAlign:"center",border:`1px solid ${C.border}`},
+          statIcon:{fontSize:20,marginBottom:5},
+          statNum:{fontSize:22,fontWeight:800},
+          statLabel:{fontSize:10,color:C.textMid,marginTop:2},
+        };
+
+        // ─── Reusable ─────────────────────────────────────────────────────────────────
+        function useTimer() {
+          const [running,setRunning]=useState(false);
+          const [elapsed,setElapsed]=useState(0);
+          const startRef=useRef(null); const intRef=useRef(null);
+          const start=()=>{ startRef.current=Date.now()-elapsed*1000; intRef.current=setInterval(()=>setElapsed(Math.floor((Date.now()-startRef.current)/1000)),1000); setRunning(true); };
+          const stop=()=>{ clearInterval(intRef.current); setRunning(false); };
+          const reset=()=>{ stop(); setElapsed(0); };
+          useEffect(()=>()=>clearInterval(intRef.current),[]);
+          return {running,elapsed,start,stop,reset};
+        }
+        function TimerWidget({onSave,label=""}) {
+          const {running,elapsed,start,stop,reset}=useTimer();
+          const fmt=s=>`${String(Math.floor(s/60)).padStart(2,"0")}:${String(s%60).padStart(2,"0")}`;
+          return (
+            <div style={{background:"#060b15",borderRadius:12,padding:"12px 14px",border:`1px solid ${C.borderAccent}`,display:"flex",alignItems:"center",gap:12}}>
+              <div style={{fontSize:24,fontWeight:800,color:C.accent,flex:1,fontVariantNumeric:"tabular-nums"}}>{fmt(elapsed)}</div>
+              {label&&<div style={{fontSize:12,color:C.textMid}}>{label}</div>}
+              {!running
+                ?<button style={{...S.chip,...S.chipActive,background:C.accentSoft}} onClick={start}>▶ Start</button>
+                :<><button style={{...S.chip,background:"rgba(255,95,109,0.15)",borderColor:C.accentRed,color:C.accentRed}} onClick={()=>{stop();if(elapsed>0&&onSave)onSave(elapsed);}}>⏹ Stop</button>
+                   <button style={S.chip} onClick={reset}>↺</button></>
+              }
+            </div>
+          );
+        }
+        function FieldRow({label,children}) { return <div style={{marginBottom:12}}><label style={S.label}>{label}</label>{children}</div>; }
+        function ChipGroup({options,value,onChange}) {
+          return <div style={S.typeRow}>{options.map(o=><button key={o} style={{...S.chip,...(value===o?S.chipActive:{})}} onClick={()=>onChange(o)}>{o}</button>)}</div>;
+        }
+        function LogItem({icon,title,sub,onDelete,color}) {
+          return (
+            <div style={S.logRow}>
+              <div style={{...S.logIcon,color:color||"inherit"}}>{icon}</div>
+              <div style={S.logInfo}>
+                <div style={{...S.logTitle,color:color||C.text}}>{title}</div>
+                <div style={S.logSub}>{sub}</div>
+              </div>
+              {onDelete&&<button style={S.delBtn} onClick={onDelete}>🗑</button>}
+            </div>
+          );
+        }
+
+        // ─── BABY SELECTOR ────────────────────────────────────────────────────────────
+        function BabySelector({babies, activeId, onSelect, onAdd, onDelete}) {
+          const [adding, setAdding] = useState(false);
+          const [newName, setNewName] = useState("");
+          const [newBirth, setNewBirth] = useState("");
+          const [newAvatar, setNewAvatar] = useState("👶");
+
+          const confirm = () => {
+            if (!newName.trim()) return;
+            onAdd(newBaby(newName.trim(), newBirth, newAvatar));
+            setAdding(false); setNewName(""); setNewBirth(""); setNewAvatar("👶");
+          };
+
+          return (
+            <div style={{...S.page, paddingBottom:0}}>
+              <div style={S.secTitle}>Choisir un enfant</div>
+              <div style={{display:"flex",flexDirection:"column",gap:9}}>
+                {babies.map(b=>(
+                  <div key={b.id} style={{...S.logRow, background: b.id===activeId ? C.accentSoft : C.surface, border:`1px solid ${b.id===activeId ? C.accent : C.border}`, cursor:"pointer"}} onClick={()=>onSelect(b.id)}>
+                    <div style={{fontSize:30}}>{b.avatar}</div>
+                    <div style={S.logInfo}>
+                      <div style={{...S.logTitle, color: b.id===activeId ? C.accent : C.text}}>{b.name}</div>
+                      <div style={S.logSub}>{b.birthDate ? getAge(b.birthDate) : "Date de naissance non renseignée"}</div>
+                    </div>
+                    {b.id===activeId && <div style={{fontSize:18,color:C.accent}}>✓</div>}
+                    {babies.length>1 && (
+                      <button style={S.delBtn} onClick={e=>{e.stopPropagation();if(window.confirm(`Supprimer ${b.name} ?`))onDelete(b.id);}}>🗑</button>
+                    )}
+                  </div>
+                ))}
+              </div>
+              {adding ? (
+                <div style={S.card}>
+                  <div style={S.secTitle}>Nouvel enfant</div>
+                  <div style={{marginTop:10}}>
+                    <FieldRow label="Prénom"><input style={S.input} value={newName} onChange={e=>setNewName(e.target.value)} placeholder="Prénom de l'enfant" /></FieldRow>
+                    <FieldRow label="Date de naissance"><input style={S.input} type="date" value={newBirth} onChange={e=>setNewBirth(e.target.value)} /></FieldRow>
+                    <FieldRow label="Avatar">
+                      <div style={S.typeRow}>{BABY_AVATARS.map(a=>(
+                        <button key={a} style={{...S.chip,...(newAvatar===a?S.chipActive:{}),fontSize:22,padding:"8px 10px"}} onClick={()=>setNewAvatar(a)}>{a}</button>
+                      ))}</div>
+                    </FieldRow>
+                    <div style={{display:"flex",gap:9}}>
+                      <button style={{...S.btn,flex:1}} onClick={confirm}>✅ Ajouter</button>
+                      <button style={{...S.btnOutline,flex:1,marginTop:6}} onClick={()=>setAdding(false)}>Annuler</button>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <button style={{...S.btn,...S.btnGreen}} onClick={()=>setAdding(true)}>+ Ajouter un enfant</button>
+              )}
+            </div>
+          );
+        }
+
+        // ─── HOME TAB ─────────────────────────────────────────────────────────────────
+        function HomeTab({data,setData}) {
+          const [editing,setEditing]=useState(false);
+          const [name,setName]=useState(data.name);
+          const [birth,setBirth]=useState(data.birthDate);
+          const [avatar,setAvatar]=useState(data.avatar||"👶");
+          const age=getAge(data.birthDate);
+          const todayFeeds=data.feeds.filter(f=>isToday(f.time)).length;
+          const todayDiapers=data.diapers.filter(d=>isToday(d.time)).length;
+          const todaySleeps=data.sleeps.filter(s=>s.end&&isToday(s.start)).length;
+          const activeSleep=data.sleeps.find(s=>!s.end);
+          const lastFeed=data.feeds[data.feeds.length-1];
+          const lastDiaper=data.diapers[data.diapers.length-1];
+          const lastWeight=data.weights[data.weights.length-1];
+          const lastTemp=data.temps[data.temps.length-1];
+
+          return (
+            <div style={S.page}>
+              <div style={{...S.cardGlow,textAlign:"center",padding:"24px 16px"}}>
+                <div style={{fontSize:56,marginBottom:8}}>{data.avatar||"👶"}</div>
+                {editing?(
+                  <div style={{display:"flex",flexDirection:"column",gap:8}}>
+                    <input style={S.input} value={name} onChange={e=>setName(e.target.value)} placeholder="Prénom" />
+                    <input style={S.input} type="date" value={birth} onChange={e=>setBirth(e.target.value)} />
+                    <div style={S.typeRow}>{BABY_AVATARS.map(a=>(
+                      <button key={a} style={{...S.chip,...(avatar===a?S.chipActive:{}),fontSize:20,padding:"6px 9px"}} onClick={()=>setAvatar(a)}>{a}</button>
+                    ))}</div>
+                    <button style={S.btn} onClick={()=>{setData(d=>({...d,name,birthDate:birth,avatar}));setEditing(false);}}>✓ Enregistrer</button>
+                  </div>
+                ):(
+                  <>
+                    <div style={{fontSize:24,fontWeight:800}}>{data.name}</div>
+                    {age&&<div style={{fontSize:14,color:C.accent,fontWeight:700,marginTop:4}}>🎂 {age}</div>}
+                    <button style={{...S.chip,marginTop:12,fontSize:12}} onClick={()=>{setName(data.name);setBirth(data.birthDate);setAvatar(data.avatar||"👶");setEditing(true);}}>✏️ Modifier le profil</button>
+                  </>
+                )}
+              </div>
+
+              <div style={S.statGrid}>
+                <div style={S.statCard}><div style={S.statIcon}>🍼</div><div style={S.statNum}>{todayFeeds}</div><div style={S.statLabel}>repas</div></div>
+                <div style={S.statCard}><div style={S.statIcon}>💩</div><div style={S.statNum}>{todayDiapers}</div><div style={S.statLabel}>couches</div></div>
+                <div style={S.statCard}><div style={S.statIcon}>😴</div><div style={S.statNum}>{todaySleeps}</div><div style={S.statLabel}>siestes</div></div>
+              </div>
+
+              <div style={S.secTitle}>Actions rapides</div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:9}}>
+                <button style={{...S.btn,marginTop:0,fontSize:13}} onClick={()=>setData(d=>({...d,feeds:[...d.feeds,{id:uid(),time:nowISO(),type:"Biberon",amount:""}]}))}>🍼 Repas rapide</button>
+                <button style={{...S.btn,marginTop:0,fontSize:13,background:`linear-gradient(135deg,${C.accentOrange},#e87d1e)`}} onClick={()=>setData(d=>({...d,diapers:[...d.diapers,{id:uid(),time:nowISO(),type:"Mixte"}]}))}>💩 Couche rapide</button>
+                <button style={{...S.btn,marginTop:0,fontSize:13,background:activeSleep?`linear-gradient(135deg,${C.accentRed},#c94b4b)`:`linear-gradient(135deg,${C.accentPurple},#7c6bf0)`}}
+                  onClick={()=>{
+                    if(activeSleep) setData(d=>({...d,sleeps:d.sleeps.map(s=>s.id===activeSleep.id?{...s,end:nowISO()}:s)}));
+                    else setData(d=>({...d,sleeps:[...d.sleeps,{id:uid(),start:nowISO(),end:null}]}));
+                  }}>
+                  {activeSleep?"⏹ Fin sieste":"😴 Début sieste"}
+                </button>
+                <button style={{...S.btn,marginTop:0,fontSize:13,background:`linear-gradient(135deg,${C.accentPink},#e060a0)`}} onClick={()=>setData(d=>({...d,activities:[...d.activities,{id:uid(),time:nowISO(),type:"Éveil",note:""}]}))}>🧸 Éveil</button>
+              </div>
+
+              <div style={S.secTitle}>Dernières activités</div>
+              <div style={{display:"flex",flexDirection:"column",gap:8}}>
+                {lastFeed&&<LogItem icon="🍼" title={`${lastFeed.type}${lastFeed.amount?" · "+lastFeed.amount+"ml":""}`} sub={`${fmtDate(lastFeed.time)} à ${fmtTime(lastFeed.time)}`}/>}
+                {lastDiaper&&<LogItem icon="💩" title={lastDiaper.type} sub={`${fmtDate(lastDiaper.time)} à ${fmtTime(lastDiaper.time)}`}/>}
+                {activeSleep&&<LogItem icon="💤" title="Sieste en cours…" sub={`Depuis ${fmtTime(activeSleep.start)}`} color={C.accentPurple}/>}
+                {lastWeight&&<LogItem icon="⚖️" title={`${lastWeight.value} kg`} sub={fmtDate(lastWeight.time)}/>}
+                {lastTemp&&<LogItem icon="🌡️" title={`${lastTemp.value}°C${lastTemp.value>=38?" ⚠️":""}`} sub={fmtDate(lastTemp.time)} color={lastTemp.value>=38?C.accentRed:undefined}/>}
+                {!lastFeed&&!lastDiaper&&<div style={S.empty}>Aucune activité pour l'instant</div>}
+              </div>
+            </div>
+          );
+        }
+
+        // ─── FEED TAB ─────────────────────────────────────────────────────────────────
+        function FeedTab({data,setData}) {
+          const [type,setType]=useState("Biberon");
+          const [amount,setAmount]=useState("");
+          const [side,setSide]=useState("Gauche");
+          const [timerVal,setTimerVal]=useState(null);
+          const [note,setNote]=useState("");
+          const add=()=>{setData(d=>({...d,feeds:[...d.feeds,{id:uid(),time:nowISO(),type,amount,side:type==="Allaitement"?side:null,duration:timerVal,note}]}));setAmount("");setTimerVal(null);setNote("");};
+          const todayFeeds=data.feeds.filter(f=>isToday(f.time));
+          return (
+            <div style={S.page}>
+              <div style={S.card}>
+                <FieldRow label="Type de repas"><ChipGroup options={["Biberon","Allaitement","Mixte","Solides","Eau/Infusion"]} value={type} onChange={setType}/></FieldRow>
+                {(type==="Biberon"||type==="Mixte")&&<FieldRow label="Quantité (ml)"><input style={S.input} type="number" value={amount} onChange={e=>setAmount(e.target.value)} placeholder="Ex : 120"/></FieldRow>}
+                {type==="Allaitement"&&<>
+                  <FieldRow label="Côté"><ChipGroup options={["Gauche","Droit","Les deux"]} value={side} onChange={setSide}/></FieldRow>
+                  <FieldRow label="Durée"><TimerWidget onSave={s=>setTimerVal(s)} label={timerVal?`✓ ${fmtDuration(timerVal)}`:""}/></FieldRow>
+                </>}
+                {type==="Solides"&&<FieldRow label="Description"><input style={S.input} value={note} onChange={e=>setNote(e.target.value)} placeholder="compote pomme, purée carotte…"/></FieldRow>}
+                <button style={S.btn} onClick={add}>✅ Enregistrer ce repas</button>
+              </div>
+              <div style={S.secTitle}>Aujourd'hui · {todayFeeds.length} repas</div>
+              {todayFeeds.length===0&&<div style={S.empty}>Aucun repas aujourd'hui</div>}
+              {[...todayFeeds].reverse().map(f=>(
+                <LogItem key={f.id} icon={f.type==="Biberon"?"🍼":f.type==="Allaitement"?"🤱":f.type==="Mixte"?"🔄":f.type==="Solides"?"🥣":"💧"}
+                  title={`${f.type}${f.amount?" · "+f.amount+"ml":""}`}
+                  sub={`${fmtTime(f.time)}${f.side?" · "+f.side:""}${f.duration?" · "+fmtDuration(f.duration):""}${f.note?" · "+f.note:""}`}
+                  onDelete={()=>setData(d=>({...d,feeds:d.feeds.filter(x=>x.id!==f.id)}))}/>
+              ))}
+              <div style={S.secTitle}>Historique</div>
+              {[...data.feeds].reverse().slice(0,15).map(f=>(
+                <LogItem key={f.id+"h"} icon={f.type==="Biberon"?"🍼":f.type==="Allaitement"?"🤱":"🥣"}
+                  title={`${f.type}${f.amount?" · "+f.amount+"ml":""}`}
+                  sub={`${fmtDate(f.time)} à ${fmtTime(f.time)}${f.duration?" · "+fmtDuration(f.duration):""}`}
+                  onDelete={()=>setData(d=>({...d,feeds:d.feeds.filter(x=>x.id!==f.id)}))}/>
+              ))}
+            </div>
+          );
+        }
+
+        // ─── SLEEP TAB ────────────────────────────────────────────────────────────────
+        function SleepTab({data,setData}) {
+          const activeSleep=data.sleeps.find(s=>!s.end);
+          const [elapsed,setElapsed]=useState(0);
+          useEffect(()=>{
+            if(!activeSleep){setElapsed(0);return;}
+            const iv=setInterval(()=>setElapsed(Math.floor((Date.now()-new Date(activeSleep.start))/1000)),1000);
+            return()=>clearInterval(iv);
+          },[activeSleep?.id]);
+          const todaySleeps=data.sleeps.filter(s=>s.end&&isToday(s.start));
+          const totalSleep=todaySleeps.reduce((a,s)=>a+(new Date(s.end)-new Date(s.start))/1000,0);
+          return (
+            <div style={S.page}>
+              <div style={{...S.cardGlow,textAlign:"center",padding:"28px 16px"}}>
+                {activeSleep?(
+                  <>
+                    <div style={{fontSize:52}}>💤</div>
+                    <div style={{fontSize:44,fontWeight:800,color:C.accentPurple,fontVariantNumeric:"tabular-nums",marginTop:6}}>{fmtDuration(elapsed)}</div>
+                    <div style={{fontSize:13,color:C.textMid,marginTop:6,marginBottom:16}}>En cours depuis {fmtTime(activeSleep.start)}</div>
+                    <button style={{...S.btn,...S.btnDanger}} onClick={()=>setData(d=>({...d,sleeps:d.sleeps.map(s=>s.id===activeSleep.id?{...s,end:nowISO()}:s)}))}>⏹ Terminer le sommeil</button>
+                  </>
+                ):(
+                  <>
+                    <div style={{fontSize:52}}>☀️</div>
+                    <div style={{fontSize:16,color:C.textMid,marginBottom:16}}>Bébé est éveillé</div>
+                    <button style={{...S.btn,...S.btnGreen}} onClick={()=>setData(d=>({...d,sleeps:[...d.sleeps,{id:uid(),start:nowISO(),end:null}]}))}>🌙 Démarrer le sommeil</button>
+                  </>
+                )}
+              </div>
+              {todaySleeps.length>0&&<div style={S.card}><div style={{fontSize:12,color:C.textMid,marginBottom:4}}>Sommeil total aujourd'hui</div><div style={{fontSize:30,fontWeight:800,color:C.accent}}>{fmtDuration(totalSleep)}</div></div>}
+              <div style={S.secTitle}>Historique sommeil</div>
+              {data.sleeps.length===0&&<div style={S.empty}>Aucun sommeil enregistré</div>}
+              {[...data.sleeps].reverse().slice(0,15).map(s=>(
+                <LogItem key={s.id} icon={s.end?"🌙":"💤"}
+                  title={`${fmtDate(s.start)} · ${fmtTime(s.start)}`}
+                  sub={s.end?`→ ${fmtTime(s.end)} · ${fmtDuration((new Date(s.end)-new Date(s.start))/1000)}`:"En cours…"}
+                  color={!s.end?C.accentPurple:undefined}
+                  onDelete={()=>setData(d=>({...d,sleeps:d.sleeps.filter(x=>x.id!==s.id)}))}/>
+              ))}
+            </div>
+          );
+        }
+
+        // ─── HEALTH TAB ───────────────────────────────────────────────────────────────
+        function HealthTab({data,setData}) {
+          const [sub,setSub]=useState("couche");
+          const [dType,setDType]=useState("Mixte");
+          const [weight,setWeight]=useState("");
+          const [height,setHeight]=useState("");
+          const [temp,setTemp]=useState("");
+          const [medName,setMedName]=useState(""); const [medDose,setMedDose]=useState(""); const [medNote,setMedNote]=useState("");
+          const [vacName,setVacName]=useState(""); const [vacNote,setVacNote]=useState("");
+          const [note,setNote]=useState("");
+          const subs=[{k:"couche",l:"💩 Couches"},{k:"poids",l:"⚖️ Poids"},{k:"taille",l:"📏 Taille"},{k:"temp",l:"🌡️ Temp"},{k:"medic",l:"💊 Médicaments"},{k:"vaccin",l:"💉 Vaccins"},{k:"notes",l:"📝 Notes"}];
+          return (
+            <div style={S.page}>
+              <div style={{display:"flex",gap:7,overflowX:"auto",scrollbarWidth:"none",paddingBottom:4}}>
+                {subs.map(t=><button key={t.k} style={{...S.chip,flex:"0 0 auto",...(sub===t.k?S.chipActive:{})}} onClick={()=>setSub(t.k)}>{t.l}</button>)}
+              </div>
+              {sub==="couche"&&<>
+                <div style={S.card}><FieldRow label="Type de couche"><ChipGroup options={["Urine","Selles","Mixte","Sèche"]} value={dType} onChange={setDType}/></FieldRow><button style={S.btn} onClick={()=>setData(d=>({...d,diapers:[...d.diapers,{id:uid(),time:nowISO(),type:dType}]}))}>✅ Enregistrer</button></div>
+                <div style={S.secTitle}>Couches du jour</div>
+                {data.diapers.filter(d=>isToday(d.time)).length===0&&<div style={S.empty}>Aucune couche aujourd'hui</div>}
+                {[...data.diapers].filter(d=>isToday(d.time)).reverse().map(d=><LogItem key={d.id} icon="💩" title={d.type} sub={fmtTime(d.time)} onDelete={()=>setData(dd=>({...dd,diapers:dd.diapers.filter(x=>x.id!==d.id)}))}/>)}
+              </>}
+              {sub==="poids"&&<>
+                <div style={S.card}><FieldRow label="Poids (kg)"><input style={S.input} type="number" step="0.01" value={weight} onChange={e=>setWeight(e.target.value)} placeholder="Ex : 3.45"/></FieldRow><button style={S.btn} onClick={()=>{if(!weight)return;setData(d=>({...d,weights:[...d.weights,{id:uid(),time:nowISO(),value:parseFloat(weight)}]}));setWeight("");}}>✅ Enregistrer</button></div>
+                <div style={S.secTitle}>Courbe de poids</div>
+                {data.weights.length===0&&<div style={S.empty}>Aucune mesure</div>}
+                {[...data.weights].reverse().map(w=><LogItem key={w.id} icon="⚖️" title={`${w.value} kg`} sub={`${fmtDate(w.time)} · ${fmtTime(w.time)}`} onDelete={()=>setData(d=>({...d,weights:d.weights.filter(x=>x.id!==w.id)}))}/>)}
+              </>}
+              {sub==="taille"&&<>
+                <div style={S.card}><FieldRow label="Taille (cm)"><input style={S.input} type="number" step="0.1" value={height} onChange={e=>setHeight(e.target.value)} placeholder="Ex : 51.5"/></FieldRow><button style={S.btn} onClick={()=>{if(!height)return;setData(d=>({...d,growths:[...d.growths,{id:uid(),time:nowISO(),value:parseFloat(height)}]}));setHeight("");}}>✅ Enregistrer</button></div>
+                <div style={S.secTitle}>Historique taille</div>
+                {(data.growths||[]).length===0&&<div style={S.empty}>Aucune mesure</div>}
+                {[...(data.growths||[])].reverse().map(g=><LogItem key={g.id} icon="📏" title={`${g.value} cm`} sub={`${fmtDate(g.time)} · ${fmtTime(g.time)}`} onDelete={()=>setData(d=>({...d,growths:d.growths.filter(x=>x.id!==g.id)}))}/>)}
+              </>}
+              {sub==="temp"&&<>
+                <div style={S.card}>
+                  <FieldRow label="Température (°C)"><input style={S.input} type="number" step="0.1" value={temp} onChange={e=>setTemp(e.target.value)} placeholder="Ex : 37.2"/></FieldRow>
+                  {temp&&parseFloat(temp)>=38&&<div style={S.alert}>⚠️ Fièvre détectée ({temp}°C). Consultez votre pédiatre si elle persiste.</div>}
+                  {temp&&parseFloat(temp)>=39&&<div style={{...S.alert,background:"rgba(255,50,50,0.15)"}}>🚨 Fièvre élevée ! Consultez un médecin rapidement.</div>}
+                  <button style={S.btn} onClick={()=>{if(!temp)return;setData(d=>({...d,temps:[...d.temps,{id:uid(),time:nowISO(),value:parseFloat(temp)}]}));setTemp("");}}>✅ Enregistrer</button>
+                </div>
+                <div style={S.secTitle}>Historique températures</div>
+                {data.temps.length===0&&<div style={S.empty}>Aucune mesure</div>}
+                {[...data.temps].reverse().map(t=><LogItem key={t.id} icon="🌡️" title={`${t.value}°C ${t.value>=38?"⚠️":"✅"}`} sub={`${fmtDate(t.time)} · ${fmtTime(t.time)}`} color={t.value>=38?C.accentRed:C.accentGreen} onDelete={()=>setData(d=>({...d,temps:d.temps.filter(x=>x.id!==t.id)}))}/>)}
+              </>}
+              {sub==="medic"&&<>
+                <div style={S.card}>
+                  <FieldRow label="Médicament"><input style={S.input} value={medName} onChange={e=>setMedName(e.target.value)} placeholder="Ex : Doliprane…"/></FieldRow>
+                  <FieldRow label="Dose"><input style={S.input} value={medDose} onChange={e=>setMedDose(e.target.value)} placeholder="Ex : 2.5 ml"/></FieldRow>
+                  <FieldRow label="Note"><input style={S.input} value={medNote} onChange={e=>setMedNote(e.target.value)} placeholder="Motif, réaction…"/></FieldRow>
+                  <button style={S.btn} onClick={()=>{if(!medName)return;setData(d=>({...d,medicines:[...d.medicines,{id:uid(),time:nowISO(),name:medName,dose:medDose,note:medNote}]}));setMedName("");setMedDose("");setMedNote("");}}>✅ Enregistrer</button>
+                </div>
+                <div style={S.secTitle}>Médicaments donnés</div>
+                {(data.medicines||[]).length===0&&<div style={S.empty}>Aucun médicament enregistré</div>}
+                {[...(data.medicines||[])].reverse().map(m=><LogItem key={m.id} icon="💊" title={`${m.name}${m.dose?" · "+m.dose:""}`} sub={`${fmtDate(m.time)} à ${fmtTime(m.time)}${m.note?" · "+m.note:""}`} onDelete={()=>setData(d=>({...d,medicines:d.medicines.filter(x=>x.id!==m.id)}))}/>)}
+              </>}
+              {sub==="vaccin"&&<>
+                <div style={S.card}>
+                  <FieldRow label="Vaccin"><input style={S.input} value={vacName} onChange={e=>setVacName(e.target.value)} placeholder="Ex : DTCaP, ROR…"/></FieldRow>
+                  <FieldRow label="Observations"><input style={S.input} value={vacNote} onChange={e=>setVacNote(e.target.value)} placeholder="Réaction, médecin…"/></FieldRow>
+                  <button style={S.btn} onClick={()=>{if(!vacName)return;setData(d=>({...d,vaccines:[...d.vaccines,{id:uid(),time:nowISO(),name:vacName,note:vacNote}]}));setVacName("");setVacNote("");}}>✅ Enregistrer</button>
+                </div>
+                <div style={S.secTitle}>Carnet vaccinal</div>
+                {(data.vaccines||[]).length===0&&<div style={S.empty}>Aucun vaccin enregistré</div>}
+                {[...(data.vaccines||[])].reverse().map(v=><LogItem key={v.id} icon="💉" title={v.name} sub={`${fmtDate(v.time)}${v.note?" · "+v.note:""}`} onDelete={()=>setData(d=>({...d,vaccines:d.vaccines.filter(x=>x.id!==v.id)}))}/>)}
+              </>}
+              {sub==="notes"&&<>
+                <div style={S.card}><FieldRow label="Note / observation"><textarea style={S.textarea} value={note} onChange={e=>setNote(e.target.value)} placeholder="Comportement inhabituel, question pour le pédiatre…"/></FieldRow><button style={S.btn} onClick={()=>{if(!note.trim())return;setData(d=>({...d,notes:[...d.notes,{id:uid(),time:nowISO(),text:note}]}));setNote("");}}>✅ Enregistrer</button></div>
+                {data.notes.length===0&&<div style={S.empty}>Aucune note</div>}
+                {[...data.notes].reverse().map(n=><LogItem key={n.id} icon="📝" title={n.text} sub={`${fmtDate(n.time)} · ${fmtTime(n.time)}`} onDelete={()=>setData(d=>({...d,notes:d.notes.filter(x=>x.id!==n.id)}))}/>)}
+              </>}
+            </div>
+          );
+        }
+
+        // ─── DEV TAB ──────────────────────────────────────────────────────────────────
+        function DevTab({data,setData}) {
+          const [sub,setSub]=useState("milestones");
+          const [actType,setActType]=useState("Éveil");
+          const [actNote,setActNote]=useState("");
+          const [msText,setMsText]=useState("");
+          return (
+            <div style={S.page}>
+              <div style={{display:"flex",gap:7,overflowX:"auto",scrollbarWidth:"none",paddingBottom:4}}>
+                {[{k:"milestones",l:"⭐ Étapes"},{k:"activities",l:"🧸 Activités"},{k:"agenda",l:"📅 Agenda médical"}].map(t=>(
+                  <button key={t.k} style={{...S.chip,flex:"0 0 auto",...(sub===t.k?S.chipActive:{})}} onClick={()=>setSub(t.k)}>{t.l}</button>
+                ))}
+              </div>
+              {sub==="milestones"&&<>
+                <div style={S.card}><FieldRow label="Ajouter une étape"><input style={S.input} value={msText} onChange={e=>setMsText(e.target.value)} placeholder="Ex : Premier sourire, tient sa tête…"/></FieldRow><button style={S.btn} onClick={()=>{if(!msText.trim())return;setData(d=>({...d,milestones:[...d.milestones,{id:uid(),time:nowISO(),text:msText}]}));setMsText("");}}>✅ Enregistrer</button></div>
+                <div style={S.secTitle}>Étapes franchies 🎉</div>
+                {(data.milestones||[]).length===0&&<div style={S.empty}>Enregistrez les premières fois de bébé !</div>}
+                {[...(data.milestones||[])].reverse().map(m=><LogItem key={m.id} icon="⭐" title={m.text} sub={fmtDate(m.time)} color={C.accentOrange} onDelete={()=>setData(d=>({...d,milestones:d.milestones.filter(x=>x.id!==m.id)}))}/>)}
+              </>}
+              {sub==="activities"&&<>
+                <div style={S.card}>
+                  <FieldRow label="Type d'activité"><ChipGroup options={["Éveil","Tummy time","Bain","Lecture","Musique","Promenade","Massage","Jeux"]} value={actType} onChange={setActType}/></FieldRow>
+                  <FieldRow label="Note"><input style={S.input} value={actNote} onChange={e=>setActNote(e.target.value)} placeholder="Réaction, durée, observation…"/></FieldRow>
+                  <button style={S.btn} onClick={()=>{setData(d=>({...d,activities:[...d.activities,{id:uid(),time:nowISO(),type:actType,note:actNote}]}));setActNote("");}}>✅ Enregistrer</button>
+                </div>
+                <div style={S.secTitle}>Activités enregistrées</div>
+                {(data.activities||[]).length===0&&<div style={S.empty}>Aucune activité enregistrée</div>}
+                {[...(data.activities||[])].reverse().slice(0,15).map(a=>(
+                  <LogItem key={a.id} icon={a.type==="Bain"?"🛁":a.type==="Lecture"?"📚":a.type==="Musique"?"🎵":a.type==="Promenade"?"🌤️":a.type==="Massage"?"🤲":"🧸"} title={a.type} sub={`${fmtDate(a.time)} · ${fmtTime(a.time)}${a.note?" · "+a.note:""}`} onDelete={()=>setData(d=>({...d,activities:d.activities.filter(x=>x.id!==a.id)}))}/>
+                ))}
+              </>}
+              {sub==="agenda"&&<>
+                <div style={{...S.card,background:"rgba(91,141,238,0.07)"}}>
+                  <div style={{fontSize:13,color:C.textMid,marginBottom:8,fontWeight:700}}>📋 Calendrier vaccinal (France)</div>
+                  {[["2 mois","DTCaPolio-Hib-Hépatite B, Pneumocoque, Méningocoque B"],["4 mois","DTCaPolio-Hib-Hépatite B, Pneumocoque, Méningocoque B (rappel)"],["5 mois","Méningocoque C"],["11 mois","DTCaPolio-Hib-Hépatite B (rappel), Pneumocoque (rappel)"],["12 mois","ROR (rougeole-oreillons-rubéole), Méningocoque C (rappel)"],["16-18 mois","ROR rappel"]].map(([age,v])=>(
+                    <div key={age} style={{padding:"9px 0",borderBottom:`1px solid ${C.border}`,display:"flex",gap:12}}>
+                      <div style={{fontSize:12,fontWeight:700,color:C.accent,width:70,flexShrink:0}}>{age}</div>
+                      <div style={{fontSize:12,color:C.textMid}}>{v}</div>
+                    </div>
+                  ))}
+                </div>
+                <div style={S.card}>
+                  <div style={{fontSize:13,color:C.textMid,marginBottom:8,fontWeight:700}}>📅 Visites médicales clés</div>
+                  {[["J8","Sage-femme à domicile"],["1 mois","Pédiatre — examen obligatoire"],["2 mois","Pédiatre + vaccins"],["9 mois","Pédiatre — examen obligatoire"],["24 mois","Pédiatre — examen obligatoire"],["Crèche","Visite médicale d'admission"],["3 ans","Avant école maternelle"]].map(([t,d])=>(
+                    <div key={t} style={{padding:"9px 0",borderBottom:`1px solid ${C.border}`,display:"flex",gap:12}}>
+                      <div style={{fontSize:12,fontWeight:700,color:C.accentGreen,width:70,flexShrink:0}}>{t}</div>
+                      <div style={{fontSize:12,color:C.textMid}}>{d}</div>
+                    </div>
+                  ))}
+                </div>
+              </>}
+            </div>
+          );
+        }
+
+        // ─── CHECKLIST TAB ────────────────────────────────────────────────────────────
+        function ChecklistTab({data,setData}) {
+          const [view,setView]=useState("daily");
+          const items=data.checklist[view]||[];
+          const done=items.filter(i=>i.done).length;
+          const pct=items.length>0?Math.round(done/items.length*100):0;
+          const toggle=id=>setData(d=>({...d,checklist:{...d.checklist,[view]:d.checklist[view].map(i=>i.id===id?{...i,done:!i.done}:i)}}));
+          const reset=()=>setData(d=>({...d,checklist:{...d.checklist,[view]:d.checklist[view].map(i=>({...i,done:false}))}}));
+          return (
+            <div style={S.page}>
+              <div style={{display:"flex",gap:7}}>
+                {[{k:"daily",l:"☀️ Quotidien"},{k:"weekly",l:"📅 Hebdo"},{k:"milestonesList",l:"🎯 Étapes clés"}].map(t=>(
+                  <button key={t.k} style={{...S.chip,flex:1,...(view===t.k?S.chipActive:{})}} onClick={()=>setView(t.k)}>{t.l}</button>
+                ))}
+              </div>
+              <div style={S.card}>
+                <div style={{display:"flex",justifyContent:"space-between",marginBottom:6}}>
+                  <span style={{fontSize:13,color:C.textMid}}>{done}/{items.length} complétés</span>
+                  <span style={{fontSize:20,fontWeight:800,color:pct===100?C.accentGreen:C.accent}}>{pct}%</span>
+                </div>
+                <div style={S.progressBar}><div style={{...S.progressFill,width:`${pct}%`,background:pct===100?C.accentGreen:C.accent}}/></div>
+                {pct===100&&<div style={{textAlign:"center",marginTop:10,color:C.accentGreen,fontWeight:700}}>🎉 Tout est fait, bravo !</div>}
+              </div>
+              {items.map(item=>(
+                <button key={item.id} style={{...S.logRow,cursor:"pointer",border:`1px solid ${item.done?"rgba(78,203,126,0.25)":C.border}`,background:item.done?"rgba(78,203,126,0.05)":C.surface,width:"100%",textAlign:"left",fontFamily:"inherit"}} onClick={()=>toggle(item.id)}>
+                  <span style={S.logIcon}>{item.icon}</span>
+                  <span style={{flex:1,fontSize:13,fontWeight:600,color:item.done?C.textDim:C.text,textDecoration:item.done?"line-through":"none"}}>{item.label}</span>
+                  <span style={{fontSize:18}}>{item.done?"✅":"⬜"}</span>
+                </button>
+              ))}
+              <button style={S.btnOutline} onClick={reset}>🔄 Tout réinitialiser</button>
+            </div>
+          );
+        }
+
+        // ─── SAVE TAB ─────────────────────────────────────────────────────────────────
+        function SaveTab({babies,setBabies,activeId}) {
+          const [msg,setMsg]=useState(null);
+          const fileRef=useRef();
+          const baby=babies.find(b=>b.id===activeId);
+
+          const exportData=()=>{
+            const blob=new Blob([JSON.stringify({babies},null,2)],{type:"application/json"});
+            const url=URL.createObjectURL(blob);
+            const a=document.createElement("a");
+            a.href=url;
+            a.download=`bebelog_${new Date().toISOString().slice(0,10)}.json`;
+            a.click();
+            URL.revokeObjectURL(url);
+            setMsg({type:"success",text:"✅ Sauvegarde téléchargée !"});
+            setTimeout(()=>setMsg(null),3000);
+          };
+
+          const importData=e=>{
+            const file=e.target.files[0];
+            if(!file)return;
+            const reader=new FileReader();
+            reader.onload=ev=>{
+              try{
+                const parsed=JSON.parse(ev.target.result);
+                if(parsed.babies&&Array.isArray(parsed.babies)){setBabies(parsed.babies);setMsg({type:"success",text:`✅ ${parsed.babies.length} enfant(s) chargé(s) !`});}
+                else{setMsg({type:"error",text:"❌ Format de fichier invalide."});}
+              }catch{setMsg({type:"error",text:"❌ Fichier invalide."});}
+              setTimeout(()=>setMsg(null),4000);
+            };
+            reader.readAsText(file);
+            e.target.value="";
+          };
+
+          const stats=baby?[
+            ["🍼 Repas",baby.feeds.length],["😴 Sommeils",baby.sleeps.length],["💩 Couches",baby.diapers.length],
+            ["⚖️ Pesées",baby.weights.length],["🌡️ Températures",baby.temps.length],
+            ["💊 Médicaments",(baby.medicines||[]).length],["💉 Vaccins",(baby.vaccines||[]).length],
+            ["⭐ Étapes",(baby.milestones||[]).length],["🧸 Activités",(baby.activities||[]).length],
+            ["📝 Notes",baby.notes.length],
+          ]:[];
+
+          return (
+            <div style={S.page}>
+              {baby&&<>
+                <div style={S.secTitle}>Données de {baby.name}</div>
+                <div style={{...S.card,display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+                  {stats.map(([label,val])=>(
+                    <div key={label} style={{display:"flex",justifyContent:"space-between",fontSize:12,padding:"5px 0",borderBottom:`1px solid ${C.border}`}}>
+                      <span style={{color:C.textMid}}>{label}</span><span style={{fontWeight:700,color:C.accent}}>{val}</span>
+                    </div>
+                  ))}
+                </div>
+              </>}
+              {msg&&<div style={msg.type==="success"?S.success:S.alert}>{msg.text}</div>}
+              <div style={S.secTitle}>Sauvegarder tous les enfants</div>
+              <div style={S.card}>
+                <p style={{fontSize:13,color:C.textMid,margin:"0 0 10px"}}>Exporte tous les enfants dans un fichier JSON (Google Drive, iCloud…).</p>
+                <button style={S.btn} onClick={exportData}>📥 Télécharger la sauvegarde (.json)</button>
+              </div>
+              <div style={S.secTitle}>Charger une sauvegarde</div>
+              <div style={S.card}>
+                <p style={{fontSize:13,color:C.textMid,margin:"0 0 10px"}}>Restaure tous les enfants depuis une sauvegarde précédente.</p>
+                <input type="file" accept=".json" ref={fileRef} style={{display:"none"}} onChange={importData}/>
+                <button style={{...S.btn,...S.btnOrange}} onClick={()=>fileRef.current.click()}>📂 Charger un fichier (.json)</button>
+              </div>
+            </div>
+          );
+        }
+
+        // ─── SUPPORT TAB ──────────────────────────────────────────────────────────────
+        function SupportTab() {
+          const [copied,setCopied]=useState(false);
+          const copyBTC=()=>{
+            navigator.clipboard.writeText(BTC_ADDRESS).then(()=>{setCopied(true);setTimeout(()=>setCopied(false),2500);});
+          };
+          return (
+            <div style={S.page}>
+              <div style={{...S.cardGlow,textAlign:"center",padding:"28px 16px"}}>
+                <div style={{fontSize:48}}>💛</div>
+                <div style={{fontSize:20,fontWeight:800,marginTop:10,marginBottom:8}}>Soutenir BébéLog</div>
+                <p style={{fontSize:14,color:C.textMid,lineHeight:1.6,margin:0}}>
+                  BébéLog est gratuit et sans publicité.<br/>
+                  Si cette application vous aide au quotidien avec votre bébé, vous pouvez soutenir son développement avec un petit geste — merci du fond du cœur ! 🙏
+                </p>
+              </div>
+
+              <div style={S.secTitle}>☕ Offrir un café (Ko-fi)</div>
+              <div style={S.card}>
+                <div style={{display:"flex",alignItems:"center",gap:14,marginBottom:14}}>
+                  <div style={{fontSize:42}}>☕</div>
+                  <div>
+                    <div style={{fontWeight:700,fontSize:15}}>Ko-fi</div>
+                    <div style={{fontSize:13,color:C.textMid,marginTop:2}}>Paiement rapide par carte bancaire, PayPal…</div>
+                  </div>
+                </div>
+                <a href={KOFI_URL} target="_blank" rel="noopener noreferrer" style={{textDecoration:"none"}}>
+                  <button style={{...S.btn,background:"linear-gradient(135deg,#ff5f5f,#ff9344)",fontSize:15}}>
+                    ☕ Soutenir sur Ko-fi
+                  </button>
+                </a>
+                <div style={{textAlign:"center",marginTop:8,fontSize:12,color:C.textDim}}>{KOFI_URL}</div>
+              </div>
+
+              <div style={S.secTitle}>₿ Don en Bitcoin</div>
+              <div style={S.card}>
+                <div style={{display:"flex",alignItems:"center",gap:14,marginBottom:14}}>
+                  <div style={{fontSize:42}}>₿</div>
+                  <div>
+                    <div style={{fontWeight:700,fontSize:15}}>Bitcoin (BTC)</div>
+                    <div style={{fontSize:13,color:C.textMid,marginTop:2}}>Copiez l'adresse et envoyez depuis votre portefeuille</div>
+                  </div>
+                </div>
+                <div style={{background:"#060b15",borderRadius:10,padding:"14px",fontFamily:"monospace",fontSize:10,color:C.accentOrange,wordBreak:"break-all",marginBottom:12,border:`1px solid rgba(247,147,26,0.3)`,lineHeight:2,letterSpacing:"0.5px",userSelect:"all"}}>
+                  {BTC_ADDRESS}
+                </div>
+                <button style={{...S.btn,background:"linear-gradient(135deg,#f7931a,#e07b00)"}} onClick={copyBTC}>
+                  {copied?"✅ Adresse copiée !":"📋 Copier l'adresse Bitcoin"}
+                </button>
+              </div>
+
+              <div style={{...S.card,textAlign:"center",background:"rgba(91,141,238,0.05)"}}>
+                <div style={{fontSize:32,marginBottom:8}}>👶✨</div>
+                <p style={{fontSize:13,color:C.textMid,lineHeight:1.7,margin:0}}>
+                  Merci d'utiliser BébéLog. Cette application a été créée avec amour pour aider les nouveaux parents à traverser ces premiers mois parfois épuisants, mais tellement précieux. Chaque contribution aide à l'améliorer. Merci !
+                </p>
+              </div>
+            </div>
+          );
+        }
+
+        // ─── APP ROOT ─────────────────────────────────────────────────────────────────
+        const TABS = [
+          {label:"🏠",full:"Accueil"},
+          {label:"🍼",full:"Repas"},
+          {label:"🌙",full:"Sommeil"},
+          {label:"❤️",full:"Santé"},
+          {label:"🌱",full:"Éveil"},
+          {label:"✅",full:"Routine"},
+          {label:"💾",full:"Données"},
+          {label:"💛",full:"Soutien"},
+        ];
+
+        function App() {
+          const [babies, setBabies] = useState(() => {
+            const saved = localStorage.getItem("bebelog_babies");
+            return saved ? JSON.parse(saved) : [newBaby("Bébé 1", "", "👶")];
+          });
+          
+          const [activeId, setActiveId] = useState(() => {
+            const saved = localStorage.getItem("bebelog_active_id");
+            if (saved) return saved;
+            const savedBabies = localStorage.getItem("bebelog_babies");
+            if (savedBabies) {
+              const parsed = JSON.parse(savedBabies);
+              if (parsed && parsed[0]) return parsed[0].id;
+            }
+            return ""; 
+          });
+
+          const [tab,        setTab]        = useState(0);
+          const [showPicker, setShowPicker] = useState(false);
+
+          useEffect(() => {
+            localStorage.setItem("bebelog_babies", JSON.stringify(babies));
+            if (babies.length > 0 && (!activeId || !babies.some(b => b.id === activeId))) {
+              setActiveId(babies[0].id);
+            }
+          }, [babies]);
+
+          useEffect(() => {
+            if (activeId) {
+              localStorage.setItem("bebelog_active_id", activeId);
+            }
+          }, [activeId]);
+
+          useEffect(() => {
+            if (!activeId && babies && babies[0]) {
+              setActiveId(babies[0].id);
+            }
+          }, []);
+
+          const activeIndex = babies.findIndex(b=>b.id===activeId);
+          const activeBaby  = babies[activeIndex] || babies[0] || newBaby("Bébé 1", "", "👶");
+
+          const setActiveBabyData = updater =>
+            setBabies(bs => bs.map(b => b.id===activeId ? (typeof updater==="function" ? updater(b) : updater) : b));
+
+          const handleSelectBaby = id => { setActiveId(id); setShowPicker(false); };
+          const handleAddBaby    = b  => { setBabies(bs=>[...bs,b]); setActiveId(b.id); setShowPicker(false); };
+          const handleDeleteBaby = id => {
+            const remaining = babies.filter(b=>b.id!==id);
+            setBabies(remaining);
+            if(activeId===id) setActiveId(remaining[0]?.id);
+            setShowPicker(false);
+          };
+
+          const renderTab = () => {
+            if(showPicker) return <BabySelector babies={babies} activeId={activeId} onSelect={handleSelectBaby} onAdd={handleAddBaby} onDelete={handleDeleteBaby}/>;
+            switch(tab) {
+              case 0: return <HomeTab      data={activeBaby} setData={setActiveBabyData}/>;
+              case 1: return <FeedTab      data={activeBaby} setData={setActiveBabyData}/>;
+              case 2: return <SleepTab     data={activeBaby} setData={setActiveBabyData}/>;
+              case 3: return <HealthTab    data={activeBaby} setData={setActiveBabyData}/>;
+              case 4: return <DevTab       data={activeBaby} setData={setActiveBabyData}/>;
+              case 5: return <ChecklistTab data={activeBaby} setData={setActiveBabyData}/>;
+              case 6: return <SaveTab      babies={babies} setBabies={setBabies} activeId={activeId}/>;
+              case 7: return <SupportTab/>;
+              default: return null;
+            }
+          };
+
+          return (
+            <div style={S.app}>
+              <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800;900&display=swap" rel="stylesheet"/>
+              <div style={S.header}>
+                {/* Top bar */}
+                <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:10}}>
+                  <div style={{fontSize:28}}>👶</div>
+                  <div style={{flex:1}}>
+                    <div style={{fontSize:18,fontWeight:800,letterSpacing:"-0.5px"}}>BébéLog</div>
+                    <div style={{fontSize:11,color:C.textMid}}>Votre compagnon parental</div>
+                  </div>
+                  {/* Baby switcher pill */}
+                  <button
+                    onClick={()=>setShowPicker(p=>!p)}
+                    style={{display:"flex",alignItems:"center",gap:7,background:showPicker?C.accentSoft:"rgba(255,255,255,0.05)",border:`1px solid ${showPicker?C.accent:C.borderAccent}`,borderRadius:20,padding:"6px 12px",cursor:"pointer",fontFamily:"inherit",color:showPicker?C.accent:C.text,fontSize:12,fontWeight:700,transition:"all 0.2s"}}>
+                    <span style={{fontSize:18}}>{activeBaby.avatar||"👶"}</span>
+                    <span style={{maxWidth:70,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{activeBaby.name}</span>
+                    {babies.length>1&&<span style={{fontSize:10,color:C.textMid}}>+{babies.length-1}</span>}
+                    <span style={{fontSize:10,color:C.textMid}}>{showPicker?"▲":"▼"}</span>
+                  </button>
+                </div>
+                {/* Nav */}
+                <div style={S.navRow}>
+                  {TABS.map((t,i)=>(
+                    <button key={i} style={{...S.navBtn,...(!showPicker&&tab===i?S.navBtnActive:{})}} onClick={()=>{setShowPicker(false);setTab(i);}}>
+                      {t.label} {t.full}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div style={S.scroll}>{renderTab()}</div>
+            </div>
+          );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
